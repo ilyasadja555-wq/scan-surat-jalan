@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scan Surat Jalan</title>
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f1f5f9;
+  color: #172033;
+}
+main { max-width: 500px; margin: auto; padding: 18px; }
+header {
+  background: #163e75;
+  color: white;
+  padding: 22px;
+  border-radius: 16px;
+  margin-bottom: 16px;
+}
+header h1 { font-size: 23px; margin: 0 0 8px; }
+header p { margin: 0; line-height: 1.5; }
+.card {
+  background: white;
+  padding: 18px;
+  border-radius: 14px;
+  margin-bottom: 16px;
+}
+h2 { font-size: 17px; margin-top: 0; }
+button, input {
+  width: 100%;
+  padding: 13px;
+  border-radius: 9px;
+  font-size: 16px;
+}
+button {
+  border: 0;
+  background: #1769e0;
+  color: white;
+  font-weight: bold;
+  margin-top: 10px;
+}
+button.secondary { background: #e2e8f0; color: #172033; }
+button:disabled { opacity: .5; }
+input {
+  border: 1px solid #cbd5e1;
+  margin: 8px 0;
+}
+video, #photoPreview {
+  display: none;
+  width: 100%;
+  border-radius: 12px;
+  margin-top: 12px;
+  background: #111827;
+}
+#photoPreview { background: #e2e8f0; }
+#message {
+  padding: 12px;
+  border-radius: 9px;
+  background: #e0f2fe;
+  margin-top: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.small { font-size: 13px; color: #64748b; line-height: 1.5; }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Scan Surat Jalan</h1>
+  <p>Scan barcode dan ambil foto bukti pengiriman.</p>
+</header>
+
+<section class="card">
+  <h2>1. Scan barcode</h2>
+  <input id="barcode" placeholder="Nomor surat jalan">
+  <button id="start" onclick="startCamera()">Buka Kamera</button>
+  <video id="video" autoplay playsinline muted></video>
+  <button class="secondary" onclick="stopCamera()">Tutup Kamera</button>
+  <p class="small">
+    Gunakan Chrome Android untuk pengujian awal.
+    Jika barcode tidak didukung browser, masukkan nomor secara manual.
+  </p>
+</section>
+
+<section class="card">
+  <h2>2. Foto bukti surat jalan</h2>
+  <button onclick="startPhotoCamera()">Buka Kamera Foto</button>
+  <video id="photoVideo" autoplay playsinline muted></video>
+  <button id="takePhoto" onclick="capturePhoto()" hidden>Ambil Foto</button>
+  <input id="upload" type="file" accept="image/*" capture="environment">
+  <img id="photoPreview" alt="Foto bukti surat jalan">
+</section>
+
+<section class="card">
+  <h2>3. Hasil pengujian</h2>
+  <button onclick="checkResult()">Periksa Data</button>
+  <div id="message">Kamera belum digunakan.</div>
+  <button class="secondary" onclick="resetAll()">Ulangi Pengujian</button>
+</section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let scanStream = null;
+let photoStream = null;
+let photoData = '';
+let detector = null;
+let scanning = false;
+
+function message(text) {
+  $('message').textContent = text;
+}
+
+async function startCamera() {
+  try {
+    stopCamera();
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error(
+        'Browser tidak mendukung kamera. Buka website melalui HTTPS.'
+      );
+    }
+
+    scanStream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: 'environment' } }
+    });
+
+    $('video').srcObject = scanStream;
+    $('video').style.display = 'block';
+    await $('video').play();
+
+    if ('BarcodeDetector' in window) {
+      try {
+        detector = new BarcodeDetector({
+          formats: [
+            'code_128', 'code_39', 'code_93',
+            'ean_13', 'ean_8', 'upc_a', 'upc_e',
+            'qr_code', 'itf', 'codabar'
+          ]
+        });
+        scanning = true;
+        scanLoop();
+        message('Kamera aktif. Arahkan ke barcode surat jalan.');
+      } catch (e) {
+        message('Kamera aktif, tetapi scanner barcode tidak tersedia. Masukkan nomor manual.');
+      }
+    } else {
+      message('Kamera aktif. Browser ini tidak mendukung scanner bawaan. Masukkan nomor manual.');
+    }
+  } catch (e) {
+    message('Gagal membuka kamera: ' + e.message);
+  }
+}
+
+async function scanLoop() {
+  if (!scanning || !detector || !$('video').videoWidth) {
+    if (scanning) requestAnimationFrame(scanLoop);
+    return;
+  }
+
+  try {
+    const codes = await detector.detect($('video'));
+    if (codes.length && codes[0].rawValue) {
+      $('barcode').value = codes[0].rawValue;
+      scanning = false;
+      message('Barcode berhasil dibaca: ' + codes[0].rawValue);
+      return;
+    }
+  } catch (e) {
+    // Abaikan frame yang gagal dibaca.
+  }
+
+  if (scanning) requestAnimationFrame(scanLoop);
+}
+
+function stopCamera() {
+  scanning = false;
+  if (scanStream) scanStream.getTracks().forEach(t => t.stop());
+  scanStream = null;
+  $('video').srcObject = null;
+  $('video').style.display = 'none';
+}
+
+async function startPhotoCamera() {
+  try {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Buka website melalui HTTPS untuk memakai kamera.');
+    }
+
+    stopPhotoCamera();
+
+    photoStream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: 'environment' } }
+    });
+
+    $('photoVideo').srcObject = photoStream;
+    $('photoVideo').style.display = 'block';
+    $('takePhoto').hidden = false;
+    await $('photoVideo').play();
+    message('Kamera foto aktif.');
+  } catch (e) {
+    message('Kamera foto gagal dibuka: ' + e.message);
+  }
+}
+
+function stopPhotoCamera() {
+  if (photoStream) photoStream.getTracks().forEach(t => t.stop());
+  photoStream = null;
+  $('photoVideo').srcObject = null;
+  $('photoVideo').style.display = 'none';
+  $('takePhoto').hidden = true;
+}
+
+function capturePhoto() {
+  const video = $('photoVideo');
+  if (!video.videoWidth) {
+    message('Tunggu sampai kamera siap.');
+    return;
+  }
+
+  const canvas = document.createElement('canvas');
+  const scale = Math.min(1, 1400 / video.videoWidth);
+  canvas.width = Math.round(video.videoWidth * scale);
+  canvas.height = Math.round(video.videoHeight * scale);
+
+  canvas.getContext('2d').drawImage(
+    video, 0, 0, canvas.width, canvas.height
+  );
+
+  photoData = canvas.toDataURL('image/jpeg', 0.8);
+  $('photoPreview').src = photoData;
+  $('photoPreview').style.display = 'block';
+  stopPhotoCamera();
+  message('Foto berhasil diambil.');
+}
+
+$('upload').addEventListener('change', event => {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  if (!file.type.startsWith('image/')) {
+    message('File harus berupa foto.');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    photoData = reader.result;
+    $('photoPreview').src = photoData;
+    $('photoPreview').style.display = 'block';
+    message('Foto berhasil dimuat.');
+  };
+  reader.readAsDataURL(file);
+});
+
+function checkResult() {
+  const barcode = $('barcode').value.trim();
+  if (!barcode) {
+    message('Barcode belum diisi.');
+    return;
+  }
+  if (!photoData) {
+    message('Barcode tersedia. Silakan ambil atau pilih foto bukti.');
+    return;
+  }
+  message(
+    'BERHASIL: barcode dan foto tersedia. ' +
+    'Ini baru tes kamera; data belum disimpan ke server.'
+  );
+}
+
+function resetAll() {
+  stopCamera();
+  stopPhotoCamera();
+  $('barcode').value = '';
+  $('upload').value = '';
+  $('photoPreview').removeAttribute('src');
+  $('photoPreview').style.display = 'none';
+  photoData = '';
+  message('Pengujian direset.');
+}
+</script>
+</body>
+</html>
